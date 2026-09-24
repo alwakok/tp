@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}АИС «Техподдержка»{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header class="topbar">
+        <div class="topbar-inner">
+            <a href="{{ url_for('tickets.list_tickets') }}" class="brand">
+                🛠 АИС «Техподдержка»
+            </a>
+
+            {% if current_user.is_authenticated %}
+            <nav class="main-nav">
+                <a href="{{ url_for('tickets.list_tickets') }}">Заявки</a>
+                <a href="{{ url_for('tickets.create_ticket') }}">Создать заявку</a>
+
+                {% if current_user.role in ['manager', 'admin'] %}
+                    <a href="{{ url_for('tickets.reports') }}">Отчёты</a>
+                {% endif %}
+
+                {% if current_user.role == 'admin' %}
+                    <a href="{{ url_for('admin.users') }}">Пользователи</a>
+                    <a href="{{ url_for('admin.categories') }}">Справочники</a>
+                {% endif %}
+            </nav>
+
+            <div class="user-box">
+                <span class="user-name">{{ current_user.username }}</span>
+                <span class="user-role">{{ role_label(current_user.role) }}</span>
+                <a href="{{ url_for('auth.logout') }}" class="btn btn-logout">Выйти</a>
+            </div>
+            {% endif %}
+        </div>
+    </header>
+
+    <main class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="flash-messages">
+                    {% for category, message in messages %}
+                        <div class="flash flash-{{ category }}">{{ message }}</div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="footer">
+        <div class="container">
+            &copy; {{ now.year }} АИС «Техподдержка». Все права защищены.
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Справочник категорий — АИС «Техподдержка»{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Справочник категорий заявок</h1>
+</div>
+
+<div class="two-col">
+    <div class="card">
+        <h2>Существующие категории</h2>
+        {% if categories %}
+        <ul class="simple-list">
+            {% for c in categories %}
+                <li>{{ c.name }}</li>
+            {% endfor %}
+        </ul>
+        {% else %}
+            <p class="muted">Категории пока не добавлены.</p>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <h2>Добавить категорию</h2>
+        <form method="post" novalidate>
+            {{ form.hidden_tag() }}
+            <div class="form-group">
+                {{ form.name.label }}
+                {{ form.name(class="form-control", placeholder="Название категории") }}
+                {% for error in form.name.errors %}<span class="form-error">{{ error }}</span>{% endfor %}
+            </div>
+            <button type="submit" class="btn btn-primary">Добавить</button>
+        </form>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}{{ ticket.ticket_number }} — АИС «Техподдержка»{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>{{ ticket.ticket_number }}: {{ ticket.subject }}</h1>
+        <p class="muted">Создана {{ ticket.created_at.strftime('%d.%m.%Y %H:%M') }}
+            пользователем {{ ticket.requester.username if ticket.requester else '—' }}</p>
+    </div>
+    <a href="{{ url_for('tickets.list_tickets') }}" class="btn btn-secondary">← К списку</a>
+</div>
+
+{% set can_modify = current_user.role in ['requester', 'operator', 'executor', 'admin'] %}
+
+<div class="ticket-grid">
+    <div class="ticket-main">
+        <section class="card">
+            <h2>Описание</h2>
+            <p class="pre-wrap">{{ ticket.description }}</p>
+        </section>
+
+        <section class="card">
+            <h2>История и комментарии ({{ ticket.comments.count() }})</h2>
+
+            {% if ticket.comments.count() == 0 %}
+                <p class="muted">Комментариев пока нет.</p>
+            {% else %}
+                <ul class="comment-list">
+                    {% for c in ticket.comments.order_by('created_at').all() %}
+                    <li class="comment">
+                        <div class="comment-head">
+                            <strong>{{ c.author.username if c.author else '—' }}</strong>
+                            <span class="muted">{{ c.created_at.strftime('%d.%m.%Y %H:%M') }}</span>
+                        </div>
+                        <div class="comment-body pre-wrap">{{ c.content }}</div>
+                    </li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+
+            {% if can_modify %}
+            <form method="post" action="{{ url_for('tickets.add_comment', ticket_id=ticket.id) }}" class="comment-form">
+                {{ comment_form.hidden_tag() }}
+                {{ comment_form.content(class="form-control", rows=3, placeholder="Написать комментарий…") }}
+                <button type="submit" class="btn btn-primary">Отправить</button>
+            </form>
+            {% else %}
+            <p class="muted small">Роль «Руководитель» имеет доступ только для просмотра.</p>
+            {% endif %}
+        </section>
+
+        <section class="card">
+            <h2>Вложения ({{ ticket.attachments.count() }})</h2>
+
+            {% if ticket.attachments.count() > 0 %}
+                <ul class="attachment-list">
+                    {% for a in ticket.attachments.all() %}
+                    <li>
+                        📎
+                        <a href="{{ url_for('tickets.download_attachment', ticket_id=ticket.id, att_id=a.id) }}">
+                            {{ a.filename }}
+                        </a>
+                        <span class="muted">— загружен {{ a.uploaded_at.strftime('%d.%m.%Y %H:%M') }}</span>
+                    </li>
+                    {% endfor %}
+                </ul>
+            {% else %}
+                <p class="muted">Вложений нет.</p>
+            {% endif %}
+
+            {% if can_modify %}
+            <form method="post" action="{{ url_for('tickets.upload_attachment', ticket_id=ticket.id) }}"
+                  enctype="multipart/form-data" class="upload-form">
+                {# ✅ КРИТИЧНО: без этой строки загрузка файла даёт 400 Bad Request #}
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="file" name="file" class="form-control" required>
+                <button type="submit" class="btn btn-secondary">Загрузить файл</button>
+            </form>
+            <p class="muted small">
+                Допустимые форматы: pdf, png, jpg, jpeg, gif, txt, log, zip, docx, xlsx.
+                Максимум 5 МБ на файл.
+            </p>
+            {% endif %}
+        </section>
+    </div>
+
+    <aside class="ticket-side">
+        <section class="card">
+            <h2>Параметры</h2>
+            <dl class="meta-list">
+                <dt>Статус</dt>
+                <dd><span class="badge status-{{ ticket.status }}">{{ status_label(ticket.status) }}</span></dd>
+
+                <dt>Приоритет</dt>
+                <dd><span class="badge priority-{{ ticket.priority }}">{{ priority_label(ticket.priority) }}</span></dd>
+
+                <dt>Категория</dt>
+                <dd>{{ ticket.category.name if ticket.category else '—' }}</dd>
+
+                <dt>Заявитель</dt>
+                <dd>{{ ticket.requester.username if ticket.requester else '—' }}</dd>
+
+                <dt>Исполнитель</dt>
+                <dd>{{ ticket.assignee.username if ticket.assignee else 'не назначен' }}</dd>
+
+                <dt>Обновлена</dt>
+                <dd>{{ ticket.updated_at.strftime('%d.%m.%Y %H:%M') }}</dd>
+            </dl>
+        </section>
+
+        {% if current_user.role in ['operator', 'admin'] %}
+        <section class="card">
+            <h2>Назначить исполнителя</h2>
+            <form method="post" action="{{ url_for('tickets.assign', ticket_id=ticket.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <select name="assignee_id" class="form-control">
+                    <option value="">— выберите —</option>
+                    {% for u in assignees %}
+                        <option value="{{ u.id }}" {% if ticket.assignee_id == u.id %}selected{% endif %}>
+                            {{ u.username }}
+                        </option>
+                    {% endfor %}
+                </select>
+                <button type="submit" class="btn btn-primary btn-block">Назначить</button>
+            </form>
+        </section>
+        {% endif %}
+
+        {% if current_user.role in ['operator', 'executor', 'admin'] %}
+        <section class="card">
+            <h2>Изменить статус</h2>
+            <form method="post" action="{{ url_for('tickets.update_status', ticket_id=ticket.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <select name="status" class="form-control">
+                    <option value="new" {% if ticket.status == 'new' %}selected{% endif %}>Новая</option>
+                    <option value="in_progress" {% if ticket.status == 'in_progress' %}selected{% endif %}>В работе</option>
+                    <option value="review" {% if ticket.status == 'review' %}selected{% endif %}>На проверке</option>
+                    <option value="done" {% if ticket.status == 'done' %}selected{% endif %}>Выполнена</option>
+                    <option value="rejected" {% if ticket.status == 'rejected' %}selected{% endif %}>Отклонена</option>
+                    <option value="closed" {% if ticket.status == 'closed' %}selected{% endif %}>Закрыта</option>
+                </select>
+                <button type="submit" class="btn btn-primary btn-block">Сохранить</button>
+            </form>
+        </section>
+        {% endif %}
+    </aside>
+</div>
+{% endblock %}

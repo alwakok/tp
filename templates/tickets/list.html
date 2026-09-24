@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Заявки — АИС «Техподдержка»{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Заявки</h1>
+    <a href="{{ url_for('tickets.create_ticket') }}" class="btn btn-primary">+ Создать заявку</a>
+</div>
+
+<form method="get" class="filter-panel">
+    <div class="filter-row">
+        <div class="filter-item">
+            <label>Статус</label>
+            <select name="status" class="form-control">
+                <option value="">Все</option>
+                <option value="new" {% if current_filters.get('status') == 'new' %}selected{% endif %}>Новая</option>
+                <option value="in_progress" {% if current_filters.get('status') == 'in_progress' %}selected{% endif %}>В работе</option>
+                <option value="review" {% if current_filters.get('status') == 'review' %}selected{% endif %}>На проверке</option>
+                <option value="done" {% if current_filters.get('status') == 'done' %}selected{% endif %}>Выполнена</option>
+                <option value="rejected" {% if current_filters.get('status') == 'rejected' %}selected{% endif %}>Отклонена</option>
+                <option value="closed" {% if current_filters.get('status') == 'closed' %}selected{% endif %}>Закрыта</option>
+            </select>
+        </div>
+
+        <div class="filter-item">
+            <label>Приоритет</label>
+            <select name="priority" class="form-control">
+                <option value="">Все</option>
+                <option value="low" {% if current_filters.get('priority') == 'low' %}selected{% endif %}>Низкий</option>
+                <option value="medium" {% if current_filters.get('priority') == 'medium' %}selected{% endif %}>Средний</option>
+                <option value="high" {% if current_filters.get('priority') == 'high' %}selected{% endif %}>Высокий</option>
+                <option value="critical" {% if current_filters.get('priority') == 'critical' %}selected{% endif %}>Критический</option>
+            </select>
+        </div>
+
+        <div class="filter-item">
+            <label>Категория</label>
+            <select name="category_id" class="form-control">
+                <option value="">Все</option>
+                {% for c in categories %}
+                    <option value="{{ c.id }}" {% if current_filters.get('category_id')|int == c.id %}selected{% endif %}>{{ c.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        {% if current_user.role in ['operator', 'manager', 'admin'] %}
+        <div class="filter-item">
+            <label>Исполнитель</label>
+            <select name="assignee_id" class="form-control">
+                <option value="">Все</option>
+                {% for u in executors %}
+                    <option value="{{ u.id }}" {% if current_filters.get('assignee_id')|int == u.id %}selected{% endif %}>{{ u.username }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        {% endif %}
+
+        <div class="filter-item">
+            <label>Дата с</label>
+            <input type="date" name="date_from" value="{{ current_filters.get('date_from', '') }}" class="form-control">
+        </div>
+
+        <div class="filter-item">
+            <label>Дата по</label>
+            <input type="date" name="date_to" value="{{ current_filters.get('date_to', '') }}" class="form-control">
+        </div>
+
+        <div class="filter-actions">
+            <button type="submit" class="btn btn-primary">Применить</button>
+            <a href="{{ url_for('tickets.list_tickets') }}" class="btn btn-secondary">Сбросить</a>
+        </div>
+    </div>
+</form>
+
+{% if tickets.items %}
+<table class="data-table">
+    <thead>
+        <tr>
+            <th>№</th>
+            <th>Тема</th>
+            <th>Статус</th>
+            <th>Приоритет</th>
+            <th>Категория</th>
+            <th>Заявитель</th>
+            <th>Исполнитель</th>
+            <th>Дата</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for t in tickets.items %}
+        <tr>
+            <td><a href="{{ url_for('tickets.detail', ticket_id=t.id) }}">{{ t.ticket_number }}</a></td>
+            <td>{{ t.subject }}</td>
+            <td><span class="badge status-{{ t.status }}">{{ status_label(t.status) }}</span></td>
+            <td><span class="badge priority-{{ t.priority }}">{{ priority_label(t.priority) }}</span></td>
+            <td>{{ t.category.name if t.category else '—' }}</td>
+            <td>{{ t.requester.username if t.requester else '—' }}</td>
+            <td>{{ t.assignee.username if t.assignee else '—' }}</td>
+            <td>{{ t.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<div class="pagination">
+    {% if tickets.has_prev %}
+        <a href="{{ url_for('tickets.list_tickets', page=tickets.prev_num, **current_filters) }}" class="btn btn-secondary">← Назад</a>
+    {% endif %}
+    <span class="page-info">Страница {{ tickets.page }} из {{ tickets.pages }}</span>
+    {% if tickets.has_next %}
+        <a href="{{ url_for('tickets.list_tickets', page=tickets.next_num, **current_filters) }}" class="btn btn-secondary">Вперёд →</a>
+    {% endif %}
+</div>
+{% else %}
+<div class="empty-state">
+    <p>Заявки не найдены.</p>
+</div>
+{% endif %}
+{% endblock %}
