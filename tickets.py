@@ -6,13 +6,15 @@ import uuid
 from datetime import datetime, timezone
 
 import magic
+from sqlalchemy.exc import IntegrityError
 
 from flask import (Blueprint, render_template, redirect, url_for, flash,
                    request, current_app, send_file, abort)
 from flask_login import current_user, login_required
 from werkzeug.utils import secure_filename
 
-from models import db, Ticket, Category, Comment, Attachment, AuditLog, User
+from audit import log_action
+from models import db, Ticket, Category, Comment, Attachment, User
 from forms import TicketForm, CommentForm
 from auth import role_required
 
@@ -140,19 +142,6 @@ def generate_ticket_number():
     return f'TS-{year}-{seq:04d}'
 
 
-def log_action(action, ticket_id=None, details=None):
-    """Запись в журнал действий с фиксацией IP (ТЗ п. 4.1.5)."""
-    log = AuditLog(
-        user_id=current_user.id if current_user.is_authenticated else None,
-        ticket_id=ticket_id,
-        action=action,
-        details=details,
-        ip_address=request.remote_addr,
-        user_agent=request.headers.get('User-Agent', '')[:255],
-    )
-    db.session.add(log)
-
-
 def allowed_by_extension(filename):
     """Проверка расширения по whitelist (без обращения к диску)."""
     if '.' not in filename:
@@ -210,24 +199,26 @@ def list_tickets():
         query = query.filter(Ticket.assignee_id == assignee_id)
     if requester_id:
         query = query.filter(Ticket.requester_id == requester_id)
-    if date_from:
-        query = query.filter(Ticket.created_at >= datetime.fromisoformat(date_from))
-    if date_to:
-        query = query.filter(Ticket.created_at <= datetime.fromisoformat(date_to))
+    try:
+        if date_from:
+            query = query.filter(Ticket.created_at >= datetime.fromisoformat(date_from))
+        if date_to:
+            query = query.filter(Ticket.created_at <= datetime.fromisoformat(date_to))
+    except ValueError:
+        flash('Некорректный формат даты в фильтре', 'danger')
+        return redirect(url_for('tickets.list_tickets'))
 
     tickets = query.order_by(Ticket.created_at.desc()).paginate(
         page=page, per_page=20, error_out=False
     )
     categories = Category.query.all()
     executors = User.query.filter_by(role='executor').all()
-    requesters = User.query.filter_by(role='requester').all()
 
     return render_template(
         'tickets/list.html',
         tickets=tickets,
         categories=categories,
         executors=executors,
-        requesters=requesters,
         current_filters=request.args,
     )
 
@@ -244,22 +235,35 @@ def create_ticket():
     form.category_id.choices = [(c.id, c.name) for c in Category.query.all()]
 
     if form.validate_on_submit():
-        ticket = Ticket(
-            ticket_number=generate_ticket_number(),
-            subject=form.subject.data,
-            description=form.description.data,
-            priority=form.priority.data,
-            category_id=form.category_id.data,
-            requester_id=current_user.id,
-        )
-        db.session.add(ticket)
-        db.session.flush()  # получаем ticket.id
+        # generate_ticket_number() вычисляет номер по max(id) без блокировки,
+        # поэтому при одновременном создании двух заявок возможен конфликт
+        # по уникальному ticket_number. Делаем несколько попыток с
+        # перегенерацией номера вместо голой 500-й ошибки.
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            ticket = Ticket(
+                ticket_number=generate_ticket_number(),
+                subject=form.subject.data,
+                description=form.description.data,
+                priority=form.priority.data,
+                category_id=form.category_id.data,
+                requester_id=current_user.id,
+            )
+            db.session.add(ticket)
+            try:
+                db.session.flush()  # получаем ticket.id, проверяем UNIQUE
+            except IntegrityError:
+                db.session.rollback()
+                if attempt == max_attempts:
+                    flash('Не удалось создать заявку, попробуйте ещё раз', 'danger')
+                    return render_template('tickets/create.html', form=form)
+                continue
 
-        log_action('create', ticket.id, f'Создана заявка {ticket.ticket_number}')
-        db.session.commit()
+            log_action('create', ticket.id, f'Создана заявка {ticket.ticket_number}')
+            db.session.commit()
 
-        flash(f'Заявка {ticket.ticket_number} создана', 'success')
-        return redirect(url_for('tickets.detail', ticket_id=ticket.id))
+            flash(f'Заявка {ticket.ticket_number} создана', 'success')
+            return redirect(url_for('tickets.detail', ticket_id=ticket.id))
 
     return render_template('tickets/create.html', form=form)
 
@@ -498,6 +502,18 @@ def reports():
     return render_template('reports/index.html')
 
 
+def _csv_safe(value):
+    """
+    Защита от CSV/Formula Injection: если значение при открытии в Excel
+    могло бы быть распознано как формула (начинается с =, +, -, @), перед
+    ним ставится апостроф — Excel/LibreOffice тогда показывают значение
+    как текст, а не исполняют его как формулу.
+    """
+    if value and value[0] in ('=', '+', '-', '@'):
+        return "'" + value
+    return value
+
+
 @tickets_bp.route('/reports/export')
 @role_required('manager', 'admin')
 def export_csv():
@@ -506,10 +522,14 @@ def export_csv():
     date_to = request.args.get('date_to')
 
     query = Ticket.query
-    if date_from:
-        query = query.filter(Ticket.created_at >= datetime.fromisoformat(date_from))
-    if date_to:
-        query = query.filter(Ticket.created_at <= datetime.fromisoformat(date_to))
+    try:
+        if date_from:
+            query = query.filter(Ticket.created_at >= datetime.fromisoformat(date_from))
+        if date_to:
+            query = query.filter(Ticket.created_at <= datetime.fromisoformat(date_to))
+    except ValueError:
+        flash('Некорректный формат даты', 'danger')
+        return redirect(url_for('tickets.reports'))
 
     tickets = query.order_by(Ticket.created_at.desc()).all()
 
@@ -523,7 +543,7 @@ def export_csv():
     for t in tickets:
         writer.writerow([
             t.ticket_number,
-            t.subject,
+            _csv_safe(t.subject),
             t.status,
             t.priority,
             t.requester.username if t.requester else '',

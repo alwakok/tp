@@ -1,5 +1,8 @@
 from flask import Blueprint, render_template, redirect, url_for, flash
 from flask_login import current_user
+from sqlalchemy.exc import IntegrityError
+
+from audit import log_action
 from models import db, User, Category
 from forms import UserForm, CategoryForm
 from auth import role_required
@@ -19,13 +22,21 @@ def users():
 def create_user():
     form = UserForm()
     if form.validate_on_submit():
-        if User.query.filter_by(username=form.username.data).first():
-            flash('Имя пользователя уже занято', 'danger')
-            return render_template('admin/user_form.html', form=form)
-
+        # Уникальность username/email проверяется в форме (UserForm,
+        # forms.py) — показывает ошибку под нужным полем. try/except ниже —
+        # страховка от гонки (TOCTOU) между проверкой формы и commit.
         user = User(username=form.username.data, email=form.email.data, role=form.role.data)
         user.set_password(form.password.data)
         db.session.add(user)
+        try:
+            db.session.flush()  # получаем user.id, проверяем UNIQUE
+        except IntegrityError:
+            db.session.rollback()
+            flash('Пользователь с таким именем или email уже существует', 'danger')
+            return render_template('admin/user_form.html', form=form)
+
+        log_action('admin_create_user', user_id=current_user.id,
+                   details=f'Создан пользователь {user.username} (роль {user.role})')
         db.session.commit()
         flash(f'Пользователь {user.username} создан', 'success')
         return redirect(url_for('admin.users'))
@@ -53,9 +64,11 @@ def toggle_user(user_id):
 
     # Блокировка/разблокировка
     user.is_active = not user.is_active
+    action = 'разблокирован' if user.is_active else 'заблокирован'
+    log_action('admin_toggle_user', user_id=current_user.id,
+               details=f'Пользователь {user.username} {action}')
     db.session.commit()
 
-    action = 'разблокирован' if user.is_active else 'заблокирован'
     flash(f'Пользователь {user.username} {action}', 'success')
 
     return redirect(url_for('admin.users'))
@@ -65,7 +78,17 @@ def toggle_user(user_id):
 def categories():
     form = CategoryForm()
     if form.validate_on_submit():
-        db.session.add(Category(name=form.name.data))
+        category = Category(name=form.name.data)
+        db.session.add(category)
+        try:
+            db.session.flush()
+        except IntegrityError:
+            db.session.rollback()
+            flash('Такая категория уже существует', 'danger')
+            return render_template('admin/categories.html', categories=Category.query.all(), form=form)
+
+        log_action('admin_create_category', user_id=current_user.id,
+                   details=f'Добавлена категория {category.name}')
         db.session.commit()
         flash('Категория добавлена', 'success')
         return redirect(url_for('admin.categories'))

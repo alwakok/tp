@@ -39,7 +39,21 @@ class Config:
     PERMANENT_SESSION_LIFETIME = timedelta(hours=8)
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = 'Lax'
-    # SESSION_COOKIE_SECURE = True  # включить при работе через HTTPS
+    # В проде (FLASK_ENV=production) включаем Secure-флаг автоматически,
+    # чтобы cookie сессии никогда не уходила по незашифрованному HTTP.
+    # В разработке по умолчанию выключено — иначе localhost по HTTP
+    # не сможет сохранить cookie. Переопределяется SESSION_COOKIE_SECURE=1/0.
+    SESSION_COOKIE_SECURE = os.environ.get(
+        'SESSION_COOKIE_SECURE',
+        '1' if os.environ.get('FLASK_ENV', 'development') == 'production' else '0'
+    ) == '1'
+
+    # ----------------------------------------------------------------------
+    # Демо-данные (seed_data в app.py). По умолчанию включены — удобно для
+    # разработки и для первого запуска при защите диплома. На реальном проде
+    # укажите SEED_DEMO_DATA=0, чтобы не создавать учётки с паролем 12345678.
+    # ----------------------------------------------------------------------
+    SEED_DEMO_DATA = os.environ.get('SEED_DEMO_DATA', '1') == '1'
 
     # ----------------------------------------------------------------------
     # Загрузка файлов (ТЗ п. 4.2.1, п. 6)

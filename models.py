@@ -41,9 +41,9 @@ class Ticket(db.Model):
     description = db.Column(db.Text, nullable=False)
     status = db.Column(db.String(20), nullable=False, default='new')
     priority = db.Column(db.String(10), nullable=False, default='medium')
-    category_id = db.Column(db.Integer, db.ForeignKey('categories.id'))
-    requester_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    assignee_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    category_id = db.Column(db.Integer, db.ForeignKey('categories.id'), index=True)
+    requester_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    assignee_id = db.Column(db.Integer, db.ForeignKey('users.id'), index=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc),
                            onupdate=lambda: datetime.now(timezone.utc))
@@ -58,14 +58,15 @@ class Category(db.Model):
     __tablename__ = 'categories'
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(80), unique=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class Comment(db.Model):
     __tablename__ = 'comments'
     id = db.Column(db.Integer, primary_key=True)
     content = db.Column(db.Text, nullable=False)
-    ticket_id = db.Column(db.Integer, db.ForeignKey('tickets.id'), nullable=False)
-    author_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    ticket_id = db.Column(db.Integer, db.ForeignKey('tickets.id'), nullable=False, index=True)
+    author_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
 
@@ -74,8 +75,8 @@ class Attachment(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     filename = db.Column(db.String(255), nullable=False)
     filepath = db.Column(db.String(500), nullable=False)
-    ticket_id = db.Column(db.Integer, db.ForeignKey('tickets.id'), nullable=False)
-    uploaded_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    ticket_id = db.Column(db.Integer, db.ForeignKey('tickets.id'), nullable=False, index=True)
+    uploaded_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
     uploaded_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
 
@@ -84,8 +85,8 @@ class AuditLog(db.Model):
     __tablename__ = 'audit_logs'
 
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
-    ticket_id = db.Column(db.Integer, db.ForeignKey('tickets.id'))
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), index=True)
+    ticket_id = db.Column(db.Integer, db.ForeignKey('tickets.id'), index=True)
     action = db.Column(db.String(50), nullable=False)
     details = db.Column(db.Text)
     ip_address = db.Column(db.String(45))          # IPv4 и IPv6

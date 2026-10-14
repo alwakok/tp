@@ -11,9 +11,6 @@
 
 Запуск для разработки:
     python app.py
-
-Запуск для продакшена:
-    gunicorn --workers 4 --bind unix:/run/tech_support.sock 'app:app'
 """
 
 import os
@@ -21,13 +18,15 @@ from datetime import datetime, timezone
 
 from flask import Flask, render_template
 from flask_login import LoginManager
+from flask_migrate import Migrate
 from flask_wtf.csrf import generate_csrf, CSRFProtect
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from config import Config
 from models import db, User, Category
-from auth import auth_bp
+from auth import auth_bp, limiter
 from tickets import tickets_bp
 from admin import admin_bp
 
@@ -91,6 +90,9 @@ def load_user(user_id):
     return db.session.get(User, int(user_id))
 
 
+migrate = Migrate()
+
+
 # ---------------------------------------------------------------------------
 # Фабрика приложения
 # ---------------------------------------------------------------------------
@@ -98,16 +100,38 @@ def create_app(config_class=Config):
     app = Flask(__name__)
     app.config.from_object(config_class)
 
+    # За обратным прокси (Nginx и т.п.) реальный IP клиента приходит в
+    # X-Forwarded-For, а не в remote_addr — и rate limiter (auth.py), и
+    # audit-лог (audit.py) используют request.remote_addr. Доверяем этому
+    # заголовку ТОЛЬКО если явно сказано, что перед приложением есть прокси
+    # (иначе клиент сам подставит себе любой X-Forwarded-For и обойдёт
+    # rate limit).
+    if os.environ.get('BEHIND_PROXY', '0') == '1':
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
     # Инициализация расширений
     db.init_app(app)
     csrf = CSRFProtect()
     csrf.init_app(app)
     login_manager.init_app(app)
+    limiter.init_app(app)
+    migrate.init_app(app, db)
 
     # Регистрация Blueprint'ов
     app.register_blueprint(auth_bp)
     app.register_blueprint(tickets_bp)
     app.register_blueprint(admin_bp)
+
+    # -----------------------------------------------------------------------
+    # Security-заголовки (защита в глубину: XSS в проекте не найден, но
+    # заголовки снижают ущерб от будущих ошибок и от кликджекинга).
+    # -----------------------------------------------------------------------
+    @app.after_request
+    def set_security_headers(response):
+        response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+        response.headers.setdefault('X-Frame-Options', 'DENY')
+        response.headers.setdefault('Referrer-Policy', 'same-origin')
+        return response
 
     # -----------------------------------------------------------------------
     # Jinja-фильтры и глобальные переменные (используются в шаблонах)
@@ -145,12 +169,28 @@ def create_app(config_class=Config):
     def request_entity_too_large(error):
         return render_template('errors/413.html'), 413
 
+    @app.errorhandler(500)
+    def internal_error(error):
+        # Сессия могла остаться в «грязном» состоянии после неудачного
+        # commit (например, IntegrityError) — откатываем её, иначе
+        # следующий запрос в этом же соединении тоже упадёт.
+        db.session.rollback()
+        app.logger.exception('Необработанная ошибка 500')
+        return render_template('errors/500.html'), 500
+
     # -----------------------------------------------------------------------
     # Инициализация БД и начальных данных
     # -----------------------------------------------------------------------
+    # db.create_all() — удобно для разработки и для демонстрации на защите
+    # (поднимает схему с нуля без ручных действий), но НЕ заменяет миграции:
+    # он создаёт только отсутствующие таблицы и не умеет накатывать ALTER на
+    # существующие. Для прод-деплоя схему нужно вести через
+    # `flask db upgrade` (см. migrations/ и README.md), а не полагаться на
+    # create_all().
     with app.app_context():
         db.create_all()
-        seed_data()
+        if app.config.get('SEED_DEMO_DATA', True):
+            seed_data()
 
     return app
 
@@ -237,7 +277,6 @@ app = create_app()
 
 if __name__ == '__main__':
     # ВНИМАНИЕ: dev-сервер Flask не предназначен для продакшена.
-    # Для продакшена используйте Gunicorn/uWSGI + Nginx.
     debug_mode = os.environ.get('FLASK_DEBUG', '0') == '1'
     app.run(host='0.0.0.0', port=5001, debug=debug_mode)
 
